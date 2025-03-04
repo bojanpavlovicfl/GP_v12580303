@@ -14,7 +14,7 @@ router.post("/accept-and-confirm", async (req, res) => {
     }
 
     // Step 1: Check if rider has enough balance
-    const riderRef = db.collection("users").doc(riderId);
+    const riderRef = db.collection("users_wallet").doc(riderId);
     const riderDoc = await riderRef.get();
     const riderBalance = riderDoc.exists
       ? riderDoc.data()?.walletBalance || 0
@@ -45,7 +45,7 @@ router.post("/accept-and-confirm", async (req, res) => {
     await transactionRef.update({ status: "completed" });
 
     // Step 5: Transfer amount to driver
-    const driverRef = db.collection("users").doc(driverId);
+    const driverRef = db.collection("users_wallet").doc(driverId);
     await db.runTransaction(async (t) => {
       const driverDoc = await t.get(driverRef);
 
@@ -85,7 +85,7 @@ router.post("/refund", async (req, res) => {
     }
 
     // Refund money to rider's wallet
-    const riderRef = db.collection("users").doc(riderId);
+    const riderRef = db.collection("users_wallet").doc(riderId);
     await db.runTransaction(async (t) => {
       const riderDoc = await t.get(riderRef);
       const currentBalance = riderDoc.data()?.walletBalance || 0;

@@ -34,7 +34,7 @@ router.post("/topup", async (req, res) => {
     if (paymentIntent.status === "succeeded") {
       await transactionRef.update({ status: "success" });
 
-      const userWalletRef = db.collection("users").doc(userId);
+      const userWalletRef = db.collection("users_wallet").doc(userId);
       await db.runTransaction(async (t) => {
         const userDoc = await t.get(userWalletRef);
 
