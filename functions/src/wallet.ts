@@ -8,7 +8,7 @@ const router = express.Router();
 router.post("/topup", async (req, res) => {
   try {
     const { userId, amount, currency = "usd", paymentMethodId } = req.body;
-    console.log(req.body);
+    // console.log(req.body);
     // Step 1: Create a Pending Transaction
     const transactionRef = db.collection("wallet_transactions").doc();
     await transactionRef.set({
@@ -18,7 +18,7 @@ router.post("/topup", async (req, res) => {
       status: "pending",
       createdAt: new Date(),
     });
-    console.log(transactionRef);
+    // console.log(transactionRef);
     // Step 2: Create Stripe Payment Intent
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amount * 100, // Convert to cents
@@ -29,7 +29,7 @@ router.post("/topup", async (req, res) => {
       return_url: "https://your-app-url.com/payment-success", // Optional redirect
       metadata: { userId, transactionId: transactionRef.id },
     });
-    console.log(paymentIntent);
+    // console.log(paymentIntent);
     // Step 3: Verify Payment & Update Wallet
     if (paymentIntent.status === "succeeded") {
       await transactionRef.update({ status: "success" });
