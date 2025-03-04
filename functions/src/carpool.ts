@@ -4,22 +4,31 @@ import { db } from "./firebase";
 
 const router = express.Router();
 
-// **1. Rider Accepts Carpool Match & Creates Payment**
-router.post("/accept-match", async (req, res) => {
+// **Integrated Carpool Flow: Match Acceptance & Payment**
+router.post("/accept-and-confirm", async (req, res) => {
   try {
     const { riderId, driverId, amount, currency = "usd", matchId } = req.body;
 
-    // Check if rider has enough balance
+    if (!riderId || !driverId || !amount || !matchId) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Step 1: Check if rider has enough balance
     const riderRef = db.collection("users").doc(riderId);
     const riderDoc = await riderRef.get();
-    const riderBalance = riderDoc.data()?.walletBalance || 0;
+    const riderBalance = riderDoc.exists
+      ? riderDoc.data()?.walletBalance || 0
+      : 0;
 
     if (riderBalance < amount) {
       return res.status(400).json({ error: "Insufficient balance" });
     }
 
-    // Create pending transaction
-    const transactionRef = await db.collection("carpool_transactions").add({
+    // Step 2: Create a Pending Transaction with Auto-Generated ID
+    const transactionRef = db.collection("carpool_transactions").doc(); // Ensure it generates an ID
+    // const transactionId = transactionRef.id; // Store the auto-generated ID
+
+    await transactionRef.set({
       riderId,
       driverId,
       amount,
@@ -29,49 +38,34 @@ router.post("/accept-match", async (req, res) => {
       createdAt: new Date(),
     });
 
-    // Deduct balance temporarily
-    await riderRef.update({
-      walletBalance: riderBalance - amount,
-    });
+    // Step 3: Deduct balance temporarily
+    await riderRef.update({ walletBalance: riderBalance - amount });
 
-    return res.json({ success: true, transactionId: transactionRef.id });
-  } catch (error) {
-    console.error("Error accepting match:", error);
-    return res.status(500).json({ error: "Failed to accept match" });
-  }
-});
-
-// **2. Confirm Carpool Completion & Process Payment**
-router.post("/confirm-ride", async (req, res) => {
-  try {
-    const { transactionId } = req.body;
-
-    const transactionRef = db
-      .collection("carpool_transactions")
-      .doc(transactionId);
-    const transactionDoc = await transactionRef.get();
-    // const { riderId, driverId, amount } = transactionDoc.data()!;
-    const { driverId, amount } = transactionDoc.data()!;
-
-    if (!transactionDoc.exists) {
-      return res.status(404).json({ error: "Transaction not found" });
-    }
-
-    // Mark as completed
+    // Step 4: Confirm Ride Completion & Process Payment
     await transactionRef.update({ status: "completed" });
 
-    // Transfer amount to driver
+    // Step 5: Transfer amount to driver
     const driverRef = db.collection("users").doc(driverId);
     await db.runTransaction(async (t) => {
       const driverDoc = await t.get(driverRef);
-      const currentBalance = driverDoc.data()?.walletBalance || 0;
-      t.update(driverRef, { walletBalance: currentBalance + amount });
+
+      if (!driverDoc.exists) {
+        // If driver doesn't exist, create with initial balance
+        t.set(driverRef, { walletBalance: amount });
+      } else {
+        const currentBalance = driverDoc.data()?.walletBalance || 0;
+        t.update(driverRef, { walletBalance: currentBalance + amount });
+      }
     });
 
-    return res.json({ success: true, message: "Payment to driver completed" });
+    return res.json({
+      success: true,
+      message: "Payment to driver completed",
+      transactionId: transactionRef.id,
+    });
   } catch (error) {
-    console.error("Error confirming ride:", error);
-    return res.status(500).json({ error: "Ride confirmation failed" });
+    console.error("Error in carpool payment process:", error);
+    return res.status(500).json({ error: "Carpool payment failed" });
   }
 });
 
