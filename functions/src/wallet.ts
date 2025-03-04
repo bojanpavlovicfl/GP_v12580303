@@ -4,79 +4,61 @@ import stripe from "./stripe";
 
 const router = express.Router();
 
-// **1. Create a Pending Wallet Transaction**
+// **Integrated Wallet Flow (Top-up, Payment, Confirmation)**
 router.post("/topup", async (req, res) => {
   try {
-    const { userId, amount, currency = "usd" } = req.body;
-
-    const transactionRef = await db.collection("wallet_transactions").add({
+    const { userId, amount, currency = "usd", paymentMethodId } = req.body;
+    console.log(req.body);
+    // Step 1: Create a Pending Transaction
+    const transactionRef = db.collection("wallet_transactions").doc();
+    await transactionRef.set({
       userId,
       amount,
       currency,
       status: "pending",
       createdAt: new Date(),
     });
-
-    res.json({ success: true, transactionId: transactionRef.id });
-  } catch (error) {
-    console.error("Error creating transaction:", error);
-    res.status(500).json({ error: "Failed to create transaction" });
-  }
-});
-
-// **2. Create a Stripe Payment Intent**
-router.post("/payment-intent", async (req, res) => {
-  try {
-    const { amount, currency, userId, transactionId, paymentMethodId } =
-      req.body;
-
-    // Retrieve user's Stripe Customer ID
+    console.log(transactionRef);
+    // Step 2: Create Stripe Payment Intent
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount * 100,
+      amount: amount * 100, // Convert to cents
       currency,
-      payment_method: paymentMethodId, // Attach the provided card
-      metadata: { userId, transactionId },
+      payment_method: paymentMethodId, // Attach provided card
+      confirm: true, // Automatically confirm the payment
+      confirmation_method: "automatic",
+      return_url: "https://your-app-url.com/payment-success", // Optional redirect
+      metadata: { userId, transactionId: transactionRef.id },
     });
-
-    res.json({ success: true, clientSecret: paymentIntent.client_secret });
-  } catch (error) {
-    console.error("Error creating payment intent:", error);
-    res.status(500).json({ error: "Failed to create payment intent" });
-  }
-});
-
-// **3. Confirm Payment & Update Wallet**
-router.post("/confirm-payment", async (req, res) => {
-  try {
-    const { transactionId, paymentIntentId } = req.body;
-
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-
+    console.log(paymentIntent);
+    // Step 3: Verify Payment & Update Wallet
     if (paymentIntent.status === "succeeded") {
-      await db.collection("wallet_transactions").doc(transactionId).update({
-        status: "success",
-      });
-
-      const transactionDoc = await db
-        .collection("wallet_transactions")
-        .doc(transactionId)
-        .get();
-      const { userId, amount } = transactionDoc.data()!;
+      await transactionRef.update({ status: "success" });
 
       const userWalletRef = db.collection("users").doc(userId);
       await db.runTransaction(async (t) => {
         const userDoc = await t.get(userWalletRef);
-        const currentBalance = userDoc.data()?.walletBalance || 0;
-        t.update(userWalletRef, { walletBalance: currentBalance + amount });
+
+        if (!userDoc.exists) {
+          // If user does not exist, create a new document
+          t.set(userWalletRef, { walletBalance: amount });
+        } else {
+          // If user exists, update their balance
+          const currentBalance = userDoc.data()?.walletBalance || 0;
+          t.update(userWalletRef, { walletBalance: currentBalance + amount });
+        }
       });
 
-      res.json({ success: true, message: "Wallet updated successfully" });
+      return res.json({
+        success: true,
+        message: "Wallet updated successfully",
+        transactionId: transactionRef.id,
+      });
     } else {
-      res.status(400).json({ error: "Payment not confirmed" });
+      return res.status(400).json({ error: "Payment not confirmed" });
     }
   } catch (error) {
-    console.error("Error confirming payment:", error);
-    res.status(500).json({ error: "Payment confirmation failed" });
+    console.error("Error in wallet top-up process:", error);
+    return res.status(500).json({ error: "Failed to process wallet top-up" });
   }
 });
 
