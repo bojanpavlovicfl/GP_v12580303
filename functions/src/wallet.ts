@@ -9,6 +9,10 @@ router.post("/topup", async (req, res) => {
   try {
     const { userId, amount, currency = "usd", paymentMethodId } = req.body;
     // console.log(req.body);
+    const customer = await stripe.customers.create({
+      metadata: { userId },
+    });
+    const stripeCustomerId = customer.id;
     // Step 1: Create a Pending Transaction
     const transactionRef = db.collection("wallet_transactions").doc();
     await transactionRef.set({
@@ -24,6 +28,7 @@ router.post("/topup", async (req, res) => {
       amount: amount * 100, // Convert to cents
       currency,
       payment_method: paymentMethodId, // Attach provided card
+      customer: stripeCustomerId,
       confirm: true, // Automatically confirm the payment
       confirmation_method: "automatic",
       return_url: "https://your-app-url.com/payment-success", // Optional redirect

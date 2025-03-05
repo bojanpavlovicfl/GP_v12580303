@@ -40,7 +40,9 @@ router.post("/request", async (req, res) => {
       createdAt: new Date(),
     });
 
-    // Step 3: Process Withdrawal via Stripe
+    const customer = await stripe.customers.create({
+      metadata: { userId },
+    });
     // Step 3: Process Withdrawal via Stripe
     const payout = await stripe.transfers.create({
       amount: amount * 100, // Convert to cents
@@ -49,6 +51,7 @@ router.post("/request", async (req, res) => {
       metadata: {
         userId: userId,
         transactionId: transactionId,
+        customerId: customer.id,
       },
     });
     // Step 4: Update Withdrawal Transaction & Deduct Balance
