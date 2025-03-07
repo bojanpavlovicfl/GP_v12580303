@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "./firebase";
-// import stripe from "./stripe";
+import stripe from "./stripe";
 
 const router = express.Router();
 
@@ -69,36 +69,176 @@ router.post("/accept-and-confirm", async (req, res) => {
   }
 });
 
-// **3. Handle Refund in Case of Dispute**
+// **Refund or Cancel Transaction and Ensure Funds Return**
 router.post("/refund", async (req, res) => {
   try {
-    const { transactionId } = req.body;
+    const { transactionId, cancelReason = "Manual Cancellation" } = req.body;
 
+    if (!transactionId) {
+      return res.status(400).json({ error: "Transaction ID is required" });
+    }
+
+    // Step 1: Retrieve the Transaction
     const transactionRef = db
       .collection("carpool_transactions")
       .doc(transactionId);
     const transactionDoc = await transactionRef.get();
-    const { riderId, amount } = transactionDoc.data()!;
 
     if (!transactionDoc.exists) {
       return res.status(404).json({ error: "Transaction not found" });
     }
 
-    // Refund money to rider's wallet
+    const { riderId, driverId, amount, status } = transactionDoc.data()!;
+
+    // Step 2: Check if the transaction was already refunded or cancelled
+    if (status === "refunded" || status === "cancelled") {
+      return res
+        .status(400)
+        .json({ error: "Transaction has already been processed" });
+    }
+
+    // Step 3: Process Refund (Update Rider & Driver Wallet)
     const riderRef = db.collection("users_wallet").doc(riderId);
-    await db.runTransaction(async (t) => {
+    const driverRef = db.collection("users_wallet").doc(driverId);
+
+    const collectionStatus = await db.runTransaction(async (t) => {
       const riderDoc = await t.get(riderRef);
-      const currentBalance = riderDoc.data()?.walletBalance || 0;
-      t.update(riderRef, { walletBalance: currentBalance + amount });
+      const driverDoc = await t.get(driverRef);
+
+      if (!riderDoc.exists || !driverDoc.exists) {
+        return false;
+      }
+
+      const riderBalance = riderDoc.data()?.walletBalance || 0;
+      const driverBalance = driverDoc.data()?.walletBalance || 0;
+
+      // ? Refund amount to the rider
+      t.update(riderRef, { walletBalance: riderBalance + amount });
+
+      // ? Deduct amount from the driver
+      t.update(driverRef, {
+        walletBalance: Math.max(driverBalance - amount, 0),
+      });
+      return true;
     });
 
-    // Mark transaction as refunded
-    await transactionRef.update({ status: "refunded" });
+    if (!collectionStatus) {
+      return res.status(404).json({ error: "Rider or Driver not found" });
+    }
 
-    return res.json({ success: true, message: "Refund successful" });
+    // Step 4: Update Transaction Status in Firestore
+    await transactionRef.update({
+      status: "refunded",
+      cancelReason: cancelReason,
+      cancelledAt: new Date(),
+    });
+
+    console.log(
+      `Transaction ${transactionId} refunded. Rider ${riderId} received refund, Driver ${driverId} balance updated.`
+    );
+
+    return res.json({
+      success: true,
+      message: "Refund processed successfully",
+    });
   } catch (error) {
     console.error("Error processing refund:", error);
-    return res.status(500).json({ error: "Refund failed" });
+    return res.status(500).json({ error: "Refund processing failed" });
+  }
+});
+
+// **Refund & Adjust Rider/Driver Balances**
+router.post("/cancel-payment", async (req, res) => {
+  try {
+    const { transactionId, cancelReason = "User Requested Cancellation" } =
+      req.body;
+
+    if (!transactionId) {
+      return res.status(400).json({ error: "Transaction ID is required" });
+    }
+
+    // Step 1: Retrieve the Transaction
+    const transactionRef = db
+      .collection("carpool_transactions")
+      .doc(transactionId);
+    const transactionDoc = await transactionRef.get();
+
+    if (!transactionDoc.exists) {
+      return res.status(404).json({ error: "Transaction not found" });
+    }
+
+    const { riderId, driverId, amount, status, stripePaymentIntentId } =
+      transactionDoc.data()!;
+
+    // Step 2: Prevent double refunds
+    if (status === "refunded" || status === "cancelled") {
+      return res
+        .status(400)
+        .json({ error: "Transaction has already been processed" });
+    }
+
+    // Step 3: Process Refund via Stripe (If Stripe Payment Was Used)
+    let stripeRefundId = null;
+    if (stripePaymentIntentId) {
+      try {
+        const refund = await stripe.refunds.create({
+          payment_intent: stripePaymentIntentId,
+        });
+        stripeRefundId = refund.id;
+        console.log("Stripe refund processed:", refund.id);
+      } catch (stripeError) {
+        console.error("Error refunding via Stripe:", stripeError);
+        return res.status(500).json({ error: "Stripe refund failed" });
+      }
+    }
+
+    // Step 4: Adjust Wallet Balances for Rider & Driver
+    const riderRef = db.collection("users_wallet").doc(riderId);
+    const driverRef = db.collection("users_wallet").doc(driverId);
+
+    await db.runTransaction(async (t) => {
+      const riderDoc = await t.get(riderRef);
+      const driverDoc = await t.get(driverRef);
+
+      if (!riderDoc.exists || !driverDoc.exists) {
+        return res.status(404).json({ error: "Rider or Driver not found" });
+      }
+
+      const riderBalance = riderDoc.data()?.walletBalance || 0;
+      const driverBalance = driverDoc.data()?.walletBalance || 0;
+
+      // ? Deduct from the driver only if the status is "completed"
+      if (status === "completed") {
+        t.update(driverRef, {
+          walletBalance: Math.max(driverBalance - amount, 0),
+        });
+      } else {
+        // ? If the transaction is NOT "completed", return funds to the rider
+        t.update(riderRef, { walletBalance: riderBalance - amount });
+      }
+      return;
+    });
+
+    // Step 5: Update Transaction Status in Firestore
+    await transactionRef.update({
+      status: "refunded",
+      cancelReason: cancelReason,
+      cancelledAt: new Date(),
+      stripeRefundId: stripeRefundId, // Store Stripe refund ID
+    });
+
+    console.log(
+      `Transaction ${transactionId} refunded. Rider ${riderId} balance adjusted, Driver ${driverId} balance updated.`
+    );
+
+    return res.json({
+      success: true,
+      message: "Refund processed successfully",
+      stripeRefundId: stripeRefundId,
+    });
+  } catch (error) {
+    console.error("Error processing refund:", error);
+    return res.status(500).json({ error: "Refund processing failed" });
   }
 });
 
