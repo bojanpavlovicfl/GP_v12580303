@@ -1,69 +1,182 @@
 import express from "express";
-import { db } from "./firebase";
+import { db, admin } from "./firebase";
 import stripe from "./stripe";
 
 const router = express.Router();
 
-// **Integrated Wallet Flow (Top-up, Payment, Confirmation)**
-router.post("/topup", async (req, res) => {
+router.post("/register-user", async (req, res) => {
   try {
-    const { userId, amount, currency = "usd", paymentMethodId } = req.body;
-    // console.log(req.body);
-    const customer = await stripe.customers.create({
-      metadata: { userId },
-    });
-    const stripeCustomerId = customer.id;
-    // Step 1: Create a Pending Transaction
-    const transactionRef = db.collection("wallet_transactions").doc();
-    await transactionRef.set({
-      userId,
-      amount,
-      currency,
-      status: "pending",
-      createdAt: new Date(),
-    });
-    // console.log(transactionRef);
-    // Step 2: Create Stripe Payment Intent
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount * 100, // Convert to cents
-      currency,
-      payment_method: paymentMethodId, // Attach provided card
-      customer: stripeCustomerId,
-      confirm: true, // Automatically confirm the payment
-      confirmation_method: "automatic",
-      return_url: "https://your-app-url.com/payment-success", // Optional redirect
-      metadata: { userId, transactionId: transactionRef.id },
-    });
-    // console.log(paymentIntent);
-    // Step 3: Verify Payment & Update Wallet
-    if (paymentIntent.status === "succeeded") {
-      await transactionRef.update({ status: "success" });
+    const { user, email } = req.body;
 
-      const userWalletRef = db.collection("users_wallet").doc(userId);
-      await db.runTransaction(async (t) => {
-        const userDoc = await t.get(userWalletRef);
+    if (!user || !email)
+      return res.status(400).json({ message: "Missing data" });
 
-        if (!userDoc.exists) {
-          // If user does not exist, create a new document
-          t.set(userWalletRef, { walletBalance: amount });
-        } else {
-          // If user exists, update their balance
-          const currentBalance = userDoc.data()?.walletBalance || 0;
-          t.update(userWalletRef, { walletBalance: currentBalance + amount });
-        }
-      });
+    await db.collection("users_wallet").doc(user).set({
+      email,
+      stripeCustomerId: null,
+      paymentMethodId: null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
-      return res.json({
-        success: true,
-        message: "Wallet updated successfully",
-        transactionId: transactionRef.id,
-      });
-    } else {
-      return res.status(400).json({ error: "Payment not confirmed" });
-    }
+    return res.json({ success: true, message: "Rider registered" });
   } catch (error) {
-    console.error("Error in wallet top-up process:", error);
-    return res.status(500).json({ error: "Failed to process wallet top-up" });
+    return res.status(500).json({ message: "Error registering rider" });
+  }
+});
+
+router.post("/create-stripe-customer", async (req, res) => {
+  try {
+    const { riderId, email } = req.body;
+
+    if (!riderId || !email) {
+      return res.status(400).json({ message: "Missing riderId or email" });
+    }
+
+    // ?? Check if the rider document exists in Firestore
+    const riderRef = db.collection("users_wallet").doc(riderId);
+    const riderDoc = await riderRef.get();
+
+    if (riderDoc.exists) {
+      const riderData = riderDoc.data();
+
+      // ?? If Stripe Customer ID already exists, return it
+      if (riderData?.stripeCustomerId) {
+        return res.json({
+          success: true,
+          customerId: riderData.stripeCustomerId,
+        });
+      }
+    } else {
+      // ?? If the rider does not exist, create a new Firestore record
+      await riderRef.set({
+        email,
+        stripeCustomerId: null,
+        paymentMethodId: null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    // ?? Create a Stripe Customer
+    const customer = await stripe.customers.create({
+      email: email,
+      metadata: { riderId },
+    });
+
+    // ?? Save Customer ID in Firestore
+    await riderRef.update({ stripeCustomerId: customer.id });
+
+    return res.json({ success: true, customerId: customer.id });
+  } catch (error) {
+    console.error("Error creating Stripe customer:", error);
+    return res
+      .status(500)
+      .json({ message: "Failed to create Stripe customer" });
+  }
+});
+
+router.post("/save-payment-method", async (req, res) => {
+  try {
+    const { riderId, paymentMethodId } = req.body;
+
+    if (!riderId || !paymentMethodId) {
+      return res
+        .status(400)
+        .json({ message: "Missing riderId or paymentMethodId" });
+    }
+
+    // ?? Retrieve Stripe Customer ID
+    const riderDoc = await db.collection("users_wallet").doc(riderId).get();
+    if (!riderDoc.exists) {
+      return res.status(400).json({ message: "RiderId not found" });
+    }
+    const stripeCustomerId = riderDoc.data()?.stripeCustomerId;
+
+    if (!stripeCustomerId) {
+      return res.status(400).json({ message: "Stripe Customer ID not found" });
+    }
+
+    // ?? Attach Payment Method to Customer
+    await stripe.paymentMethods.attach(paymentMethodId, {
+      customer: stripeCustomerId,
+    });
+
+    // ?? Set Payment Method as Default
+    await stripe.customers.update(stripeCustomerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+
+    // ?? Save Payment Method in db
+    await db
+      .collection("users_wallet")
+      .doc(riderId)
+      .update({ paymentMethodId });
+
+    return res.json({ success: true, message: "Payment method saved" });
+  } catch (error) {
+    console.error("Error saving payment method:", error);
+    return res.status(500).json({ message: "Failed to save payment method" });
+  }
+});
+
+router.post("/freeze-payment", async (req, res) => {
+  try {
+    // ?? Extract request body
+    const { riderId, matchId, sessionId, amount } = req.body;
+
+    // ?? Validate request data
+    if (!riderId || !matchId || !sessionId || !amount) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    if (typeof amount !== "number" || amount <= 0) {
+      return res
+        .status(400)
+        .json({ message: "Invalid amount. Must be a positive number." });
+    }
+
+    // ?? Retrieve rider document from Firestore
+    const riderRef = db.collection("users_wallet").doc(riderId);
+    const riderDoc = await riderRef.get();
+
+    if (!riderDoc.exists) {
+      return res.status(404).json({ message: "Rider not found" });
+    }
+
+    const riderData = riderDoc.data();
+    if (!riderData?.stripeCustomerId || !riderData?.paymentMethodId) {
+      return res.status(400).json({ message: "Stripe details missing" });
+    }
+
+    const { stripeCustomerId, paymentMethodId } = riderData;
+    console.log(stripeCustomerId, paymentMethodId);
+    // ?? Create Stripe PaymentIntent (Freeze Funds)
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100), // Convert to cents and ensure it's an integer
+      currency: "usd",
+      customer: stripeCustomerId,
+      payment_method: paymentMethodId,
+      confirm: true,
+      return_url: "https://your-app-url.com/payment-success",
+      // capture_method: "manual", // Hold funds, charge later
+    });
+
+    console.log(paymentIntent);
+    await db
+      .collection("matches")
+      .doc(matchId)
+      .collection("carpoolSessions")
+      .doc(sessionId)
+      .set(
+        {
+          paymentIntentId: paymentIntent.id,
+          status: "pending",
+        },
+        { merge: true } // ? Ensures document is created if it doesn¡Çt exist
+      );
+
+    return res.json({ success: true, paymentIntentId: paymentIntent.id });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to freeze payment" });
   }
 });
 

@@ -24,7 +24,7 @@ import cors from "cors";
 import walletRoutes from "./wallet";
 import withdrawRoutes from "./withdraw";
 import carpoolRoutes from "./carpool";
-import validationRoutes from "./validation";
+// import validationRoutes from "./validation";
 
 const app = express();
 app.use(cors());
@@ -33,5 +33,5 @@ app.use(express.json());
 app.use("/wallet", walletRoutes);
 app.use("/withdraw", withdrawRoutes);
 app.use("/carpool", carpoolRoutes);
-app.use("/validation", validationRoutes);
+// app.use("/validation", validationRoutes);
 export const api = functions.https.onRequest(app);
