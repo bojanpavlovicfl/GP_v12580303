@@ -30,14 +30,14 @@ async function validateCarpoolSession(matchId: string, sessionId: string) {
     startTime,
     status,
   } = sessionData;
-  let amount = 0;
   if (status !== "pending") return;
   if (driverAmount == riderAmount) {
     await sessionRef.update({ amount: riderAmount });
   } else {
     return;
   }
-
+  const amount = sessionData?.amount;
+  console.log("amount", amount);
   const now = admin.firestore.Timestamp.now();
   const daysPassed = (now.seconds - startTime.seconds) / (60 * 60 * 24);
   if (riderResponse === "accepted" && driverResponse === "accepted") {
@@ -50,6 +50,7 @@ async function validateCarpoolSession(matchId: string, sessionId: string) {
       .update({
         walletBalance: admin.firestore.FieldValue.increment(amount),
       });
+    console.log("driver balance");
     await sessionRef.update({ status: "approved" });
   } else if (riderResponse === "refused" && driverResponse === "refused") {
     await stripe.paymentIntents.cancel(paymentIntentId);
