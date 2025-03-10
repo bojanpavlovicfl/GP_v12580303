@@ -18,7 +18,7 @@ router.post("/register-user", async (req, res) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return res.json({ success: true, message: "Rider registered" });
+    return res.json({ success: true, message: "User registered" });
   } catch (error) {
     return res.status(500).json({ message: "Error registering rider" });
   }

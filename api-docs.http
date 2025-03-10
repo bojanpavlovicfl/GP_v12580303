@@ -1,0 +1,89 @@
+### ?? Register a User
+POST https://your-cloud-function-url.com/api/register-user
+Content-Type: application/json
+
+{
+  "user": "testUser123",
+  "email": "testuser@example.com"
+}
+
+### ?? Create Stripe Customer
+POST https://your-cloud-function-url.com/api/create-stripe-customer
+Content-Type: application/json
+
+{
+  "riderId": "testRider123",
+  "email": "testuser@example.com"
+}
+
+### ?? Save Payment Method
+POST https://your-cloud-function-url.com/api/save-payment-method
+Content-Type: application/json
+
+{
+  "riderId": "testRider123",
+  "paymentMethodId": "pm_1R0p3PG6b521LrzeVEM6zJ5w"
+}
+
+### ?? Freeze Payment (Hold Funds)
+POST https://your-cloud-function-url.com/api/freeze-payment
+Content-Type: application/json
+
+{
+  "riderId": "testRider123",
+  "matchId": "match_001",
+  "sessionId": "session_abc",
+  "amount": 50
+}
+
+### ?? Update Rider Response
+POST https://your-cloud-function-url.com/api/update-rider-response
+Content-Type: application/json
+
+{
+  "matchId": "match_001",
+  "sessionId": "session_abc",
+  "riderResponse": "accepted",
+  "riderAmount": 50
+}
+
+### ?? Update Driver Response
+POST https://your-cloud-function-url.com/api/update-driver-response
+Content-Type: application/json
+
+{
+  "matchId": "match_001",
+  "sessionId": "session_abc",
+  "driverResponse": "accepted",
+  "driverId": "driver_123",
+  "driverAmount": 50
+}
+
+### ?? Request Driver Withdrawal
+POST https://your-cloud-function-url.com/api/request-withdrawal
+Content-Type: application/json
+
+{
+  "driverId": "driver_123",
+  "amount": 50
+}
+
+### ?? Register a Driver on Stripe
+POST https://your-cloud-function-url.com/api/register-driver
+Content-Type: application/json
+
+{
+  "driverId": "driver_123",
+  "email": "driver@example.com"
+}
+
+### ?? Create Stripe Onboarding Link
+POST https://your-cloud-function-url.com/api/create-onboarding-link
+Content-Type: application/json
+
+{
+  "driverId": "driver_123"
+}
+
+### ?? Check Driver Status on Stripe
+GET https://your-cloud-function-url.com/api/check-driver-status/driver_123
