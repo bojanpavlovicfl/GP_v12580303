@@ -43,7 +43,7 @@ router.post("/request-withdrawal", async (req, res) => {
 
     // ?? Deduct the withdrawn amount from wallet balance
     await db
-      .collection("drivers")
+      .collection("users_wallet")
       .doc(driverId)
       .update({
         walletBalance: admin.firestore.FieldValue.increment(-amount),
